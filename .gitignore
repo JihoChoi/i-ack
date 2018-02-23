@@ -4,9 +4,12 @@
 # additional gitignore for build_dir
 # openwrt dir contains its own gitignore file
 
-openwrt/build_dir/target-mips_24kc_musl/linux-ar71xx_generic/backports-2017-11-01/drivers/net/wireless/ath/ath9k/ath9k.mod.c
-openwrt/build_dir/target-mips_24kc_musl/linux-ar71xx_generic/backports-2017-11-01/drivers/net/wireless/ath/ath9k/ath9k_common.mod.c
-openwrt/build_dir/target-mips_24kc_musl/linux-ar71xx_generic/backports-2017-11-01/drivers/net/wireless/ath/ath9k/ath9k_hw.mod.c
+/openwrt/build_dir/target-mips_24kc_musl/linux-ar71xx_generic/backports-2017-11-01/drivers/net/wireless/ath/ath9k/ath9k.mod.c
+/openwrt/build_dir/target-mips_24kc_musl/linux-ar71xx_generic/backports-2017-11-01/drivers/net/wireless/ath/ath9k/ath9k_common.mod.c
+/openwrt/build_dir/target-mips_24kc_musl/linux-ar71xx_generic/backports-2017-11-01/drivers/net/wireless/ath/ath9k/ath9k_hw.mod.c
+
+
+/openwrt/build_dir/target-mips_24kc_musl/linux-ar71xx_generic/backports-2017-11-01/drivers/net/wireless/ath/ath9k/*.mod.c
 
 
 
