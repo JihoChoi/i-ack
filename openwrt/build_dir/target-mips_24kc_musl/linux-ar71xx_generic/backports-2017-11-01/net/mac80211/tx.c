@@ -85,10 +85,6 @@ static __le16 ieee80211_duration(struct ieee80211_tx_data *tx,
 
 	erp = txrate->flags & IEEE80211_RATE_ERP_G;
 
-
-
-	
-
 	/*
 	 * data and mgmt (except PS Poll):
 	 * - during CFP: 32768
@@ -1919,6 +1915,194 @@ static int ieee80211_skb_resize(struct ieee80211_sub_if_data *sdata,
 	return 0;
 }
 
+
+
+/************************************************************************
+i-ACK
+
+	JIHO ONYU
+************************************************************************/
+
+/* 
+	Check TCP Packet
+*/
+
+static bool ieee80211_is_tcp_data(struct sk_buff *skb)
+{
+	unsigned char *nh = skb_network_header(skb);
+	struct iphdr *iphdr = NULL;
+	unsigned char *th = skb_transport_header(skb);
+	struct tcphdr *tcphdr = NULL;
+	unsigned char *tail = skb_tail_pointer(skb);
+	u32 network_header_len = skb_network_header_len(skb);
+	__u16 iplen = 0, data_offset_in_bytes = 0;
+	u32 data_len = 0;
+	
+	/* network_header must contain at least IP header */
+	if (network_header_len < sizeof(struct iphdr))
+		return false;
+
+	iphdr = (struct iphdr *)nh;
+
+	/* check IPv4 */
+	if (iphdr->version != 4)
+		return false;
+	/* check IP header length */
+	if (iphdr->ihl * 4u != network_header_len)
+		return false;
+	/* check packet length */
+	iplen = be16_to_cpu(iphdr->tot_len);
+	if (tail-nh < iplen)
+		return false;
+	/* check protocol */
+	if (iphdr->protocol != IPPROTO_TCP)
+		return false;
+
+	/* check against the minimum tcp header size */
+	if (tail-th < sizeof(struct tcphdr))
+		return false;
+
+	tcphdr = (struct tcphdr *)th;
+	data_offset_in_bytes = tcphdr->doff * 4u;
+
+	/* calculate data length */
+	if (iplen - network_header_len < data_offset_in_bytes)
+		return false;
+	data_len = iplen - network_header_len - data_offset_in_bytes;
+
+	/* calculate TCP checksum */
+	{
+		u32 tcplen = data_offset_in_bytes + data_len;
+		u16 prev_check = tcphdr->check, new_check;
+
+		/* Reset checksum before calculating checksum.
+		 * We need to restore it back */
+		tcphdr->check = 0;
+		new_check = csum_tcpudp_magic(iphdr->saddr, iphdr->daddr, tcplen, IPPROTO_TCP,
+			csum_partial(th, tcplen, 0));
+
+		/* restore value */
+		tcphdr->check = prev_check;
+
+		if (new_check != prev_check)
+			return false;
+	}
+
+	/* we've got data length now */
+	return (data_len > 0);
+}
+
+
+
+
+// static struct sk_buff *ieee80211_generate_tcp_ack_reply(struct sk_buff *skb)
+// {
+// 	/* assumption: skb is checked against ieee80211_is_tcp_data() */
+// 	struct sk_buff *buff;
+// 	struct iphdr *rcv_iphdr = ip_hdr(skb), *ack_iphdr;
+// 	struct tcphdr *rcv_tcphdr = tcp_hdr(skb), *ack_tcphdr;
+// 	const size_t mac_len = sizeof(struct ethhdr);
+// 	u32 ip_header_len = sizeof(struct iphdr);
+// 	u32 tcp_header_len = sizeof(struct tcphdr);
+// 	u16 ip_len = be16_to_cpu(rcv_iphdr->tot_len);
+// 	u32 tcp_data_len = ip_len - rcv_iphdr->ihl*4u - rcv_tcphdr->doff*4u;
+
+// 	buff = dev_alloc_skb(mac_len + ip_header_len + tcp_header_len);
+// 	if (buff == NULL)
+// 		return NULL;
+
+// 	/* fill in buffer from this point */
+// 	skb_reserve(buff, mac_len + ip_header_len + tcp_header_len);
+
+// 	/* build tcp header */
+// 	{
+// 		u32 ack_seq;
+// 		skb_push(buff, tcp_header_len);
+// 		skb_reset_transport_header(buff);
+// 		ack_tcphdr = tcp_hdr(buff);
+// 		memset(ack_tcphdr, 0, sizeof(struct tcphdr));
+
+// 		ack_seq = be32_to_cpu(rcv_tcphdr->seq) + tcp_data_len;
+// 		ack_tcphdr->source  = rcv_tcphdr->dest;
+// 		ack_tcphdr->dest    = rcv_tcphdr->source;
+// 		ack_tcphdr->seq     = rcv_tcphdr->ack_seq; /* TODO: use proper seq */
+// 		ack_tcphdr->ack_seq = cpu_to_be32(ack_seq);
+// 		ack_tcphdr->doff    = 5;
+// 		ack_tcphdr->ack     = 1;
+// 		ack_tcphdr->window  = cpu_to_be16(4000); /* TODO: fix magic number */
+// 		ack_tcphdr->check   = 0;
+// 		ack_tcphdr->urg_ptr = cpu_to_be16(0);
+// 	}
+
+// 	/* build ip header */
+// 	{
+// 		skb_push(buff, ip_header_len);
+// 		skb_reset_network_header(buff);
+// 		ack_iphdr = ip_hdr(buff);
+// 		memset(ack_iphdr, 0, sizeof(struct iphdr));
+
+// 		ack_iphdr->version = 4;
+// 		ack_iphdr->ihl = 5;
+// 		ack_iphdr->tos = 0;
+// 		ack_iphdr->tot_len = cpu_to_be16(ip_header_len + tcp_header_len);
+
+// 		/* according to rfc6864, sources may set ID field of atomic datagrams
+// 		 * to any value. Since we send atomic datagram, it's ok to set to some
+// 		 * magic value. */
+// 		ack_iphdr->id  = cpu_to_be16(1700);
+// 		ack_iphdr->frag_off = cpu_to_be16(IP_DF);
+
+// 		ack_iphdr->ttl = 128; /* FIXME: magic TTL */
+// 		ack_iphdr->protocol = IPPROTO_TCP;
+
+// 		ack_iphdr->saddr = rcv_iphdr->daddr;
+// 		ack_iphdr->daddr = rcv_iphdr->saddr;
+
+// 		ip_send_check(ack_iphdr);
+// 	}
+
+// 	/* build ethernet header */
+// 	{
+// 		struct ieee80211_hdr *hdr = (struct ieee80211_hdr *) skb->data;
+// 		struct ethhdr *eth;
+// 		skb_push(buff, mac_len);
+// 		skb_reset_mac_header(buff);
+// 		eth = eth_hdr(buff);
+// 		memcpy(eth->h_dest, ieee80211_get_SA(hdr), ETH_ALEN);
+// 		memcpy(eth->h_source, ieee80211_get_DA(hdr), ETH_ALEN);
+// 		eth->h_proto = cpu_to_be16(ETH_P_IP);
+// 	}
+
+// 	/* TCP checksum */
+// 	ack_tcphdr->check = csum_tcpudp_magic(ack_iphdr->saddr, ack_iphdr->daddr,
+// 		tcp_header_len, IPPROTO_TCP, csum_partial(ack_tcphdr, tcp_header_len, 0));
+
+// 	buff->dev = skb->dev;
+// 	buff->protocol = cpu_to_be16(ETH_P_IP);
+// 	buff->ip_summed = CHECKSUM_UNNECESSARY;
+// 	memset(buff->cb, 0, sizeof(buff->cb));
+
+// 	return buff;
+// }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 void ieee80211_xmit(struct ieee80211_sub_if_data *sdata,
 		    struct sta_info *sta, struct sk_buff *skb)
 {
@@ -1929,6 +2113,14 @@ void ieee80211_xmit(struct ieee80211_sub_if_data *sdata,
 	bool may_encrypt;
 
 	may_encrypt = !(info->flags & IEEE80211_TX_INTFL_DONT_ENCRYPT);
+
+
+	// JIHO
+	if (ieee80211_is_data(hdr->frame_control) && ieee80211_is_tcp_data(skb))
+	{
+		// skb->iack_skb = ieee80211_generate_tcp_ack_reply(skb);
+	}
+
 
 	headroom = local->tx_headroom;
 	if (may_encrypt)
